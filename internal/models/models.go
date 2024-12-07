@@ -1,48 +1,47 @@
 package models
 
-import "time"
-
-type KeyWord struct {
-	Id      int    `json:"id"`
-	KeyWord string `json:"key_word"`
+type Game struct {
+	Id                *int    `json:"id"`
+	GameId            *string `json:"game_id"`
+	GameNameEn        *string `json:"game_name_en"`
+	GameDescriptionEn *string `json:"game_description_en"`
+	GameDeveloper     *string `json:"game_developer"`
+	GameUrlName       *string `json:"game_url_name"`
+	GameRang          *int    `json:"game_rang"`
 }
 
-type KeyWordReq struct {
-	KeyWord string `json:"key_word"`
+type InsertIntoDbGame struct {
+	GameId        string `json:"game_id"`
+	GameNameEn    string `json:"game_name_en"`
+	GameDeveloper string `json:"game_developer"`
+	GameUrlName   string `json:"game_url_name"`
 }
 
-type Resp struct {
-	Status  string      `json:"status"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data"`
+type ResponseGd struct {
+	Data DataGd `json:"data"`
 }
 
-type GitReposRespItem struct {
-	FullName string `json:"full_name"`
-	Homepage string `json:"homepage"`
+type DataGd struct {
+	GamesSearched GamesSearchedGd `json:"gamesSearched"`
 }
 
-type GitReposResp struct {
-	TotalCount int                `json:"total_count"`
-	Items      []GitReposRespItem `json:"items"`
+type GamesSearchedGd struct {
+	HitsPerPage int     `json:"hitsPerPage"`
+	NbHits      int     `json:"nbHits"`
+	NbPages     int     `json:"nbPages"`
+	Page        int     `json:"page"`
+	Hits        []HitGd `json:"hits"`
 }
 
-type GitReposReadme struct {
-	Content string `json:"content"`
+type HitGd struct {
+	ObjectID      string   `json:"objectID"`
+	Title         string   `json:"title"`
+	Company       string   `json:"company"`
+	Visible       bool     `json:"visible"`
+	ExclusiveGame int      `json:"exclusiveGame"`
+	SlugsGd       []SlugGd `json:"slugs"`
 }
 
-type Repos struct {
-	Id        int        `json:"id"`
-	KeyWord   *string    `json:"key_word"`
-	RepoName  *string    `json:"repo_name"`
-	Homepage  *string    `json:"homepage"`
-	Content   *string    `json:"content"`
-	Comment   *string    `json:"comment"`
-	IsChecked *bool      `json:"is_checked"`
-	CreatedAt *time.Time `json:"created_at"`
-}
-
-type ReqComment struct {
-	Id      int    `json:"id"`
-	Comment string `json:"comment"`
+type SlugGd struct {
+	Name string `json:"name"`
 }

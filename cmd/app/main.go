@@ -5,17 +5,17 @@ import (
 	"go.uber.org/fx"
 	"os"
 
-	"ugames/internal/config"
-	"ugames/internal/handler"
-	"ugames/internal/repo"
-	"ugames/internal/routes"
+	"casualgames/internal/config"
+	"casualgames/internal/handler"
+	"casualgames/internal/repo"
+	"casualgames/internal/routes"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
-const serverPort = "8088"
+const serverPort = "8083"
 
 func main() {
 	app := fx.New(

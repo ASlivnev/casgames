@@ -1,4 +1,4 @@
-module ugames
+module casualgames
 
 go 1.23.0
 

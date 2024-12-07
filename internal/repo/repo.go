@@ -1,13 +1,13 @@
 package repo
 
 import (
+	"casualgames/internal/models"
 	"context"
 	"fmt"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/rs/zerolog/log"
 
-	"ugames/internal/config"
-	"ugames/internal/models"
+	"casualgames/internal/config"
 )
 
 type Repo struct {
@@ -45,28 +45,6 @@ func NewPgxPool(ctx context.Context, cnf *config.Cnf) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-func (repo *Repo) GetKeyWordsList() ([]models.KeyWord, error) {
-	sql := `SELECT id, key_word FROM ugames.key_words`
-
-	var data []models.KeyWord
-	rows, err := repo.db.Query(context.Background(), sql)
-	if err != nil {
-		log.Error().Msg("[PGXPOOL] Keywords select: " + err.Error())
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var g models.KeyWord
-		err = rows.Scan(&g.Id, &g.KeyWord)
-		if err != nil {
-			log.Error().Msg("[PGXPOOL] Keywords rows scan: " + err.Error())
-		}
-		data = append(data, g)
-	}
-
-	return data, err
-}
-
 func (repo *Repo) DeallocateAll() error {
 	sql := `DEALLOCATE PREPARE ALL;`
 	query, err := repo.db.Query(context.Background(), sql)
@@ -78,69 +56,79 @@ func (repo *Repo) DeallocateAll() error {
 	return err
 }
 
-func (repo *Repo) GetUncheckedRepos() ([]models.Repos, error) {
-	sql := `SELECT id, repo_name, homepage, is_checked FROM ugames.repos WHERE is_checked isnull OR is_checked = false  ORDER BY created_at DESC`
-	var data []models.Repos
-	rows, err := repo.db.Query(context.Background(), sql)
+func (repo *Repo) InsertGame(game models.InsertIntoDbGame) {
+	sqlStatement := `
+		INSERT INTO casualgames.games (
+			game_id, 
+			game_name_en, 
+			game_developer, 
+			game_url_name
+		) VALUES ($1, $2, $3, $4) 
+		ON CONFLICT DO NOTHING`
+	_, err := repo.db.Exec(
+		context.Background(),
+		sqlStatement,
+		game.GameId,
+		game.GameNameEn,
+		game.GameDeveloper,
+		game.GameUrlName,
+	)
 	if err != nil {
-		log.Error().Msg("[PGXPOOL] GetUncheckedRepos select: " + err.Error())
+		log.Error().Msg(err.Error())
+	}
+}
+
+func (repo *Repo) GetGames(page int) []models.Game {
+	page = page * 100
+	sqlStatement := `
+		SELECT 
+			id, 
+			game_id, 
+			game_name_en, 
+			game_description_en, 
+			game_developer, 
+			game_url_name, 
+			game_rang 
+		FROM casualgames.games 
+		    ORDER BY game_rang DESC
+		LIMIT 100 OFFSET $1`
+	rows, err := repo.db.Query(context.Background(), sqlStatement, page)
+	if err != nil {
+		log.Error().Msg(err.Error())
 	}
 	defer rows.Close()
 
+	games := make([]models.Game, 0)
 	for rows.Next() {
-		var g models.Repos
-		err = rows.Scan(&g.Id, &g.RepoName, &g.Homepage, &g.IsChecked)
+		var game models.Game
+		err = rows.Scan(
+			&game.Id,
+			&game.GameId,
+			&game.GameNameEn,
+			&game.GameDescriptionEn,
+			&game.GameDeveloper,
+			&game.GameUrlName,
+			&game.GameRang,
+		)
 		if err != nil {
-			log.Error().Msg("[PGXPOOL] GetUncheckedRepos rows scan: " + err.Error())
+			log.Error().Msg(err.Error())
 		}
-		data = append(data, g)
+		games = append(games, game)
 	}
 
-	return data, err
+	return games
 }
 
-func (repo *Repo) GetCheckedRepos() ([]models.Repos, error) {
-	sql := `SELECT id, key_word, repo_name, homepage, content, comment, created_at FROM ugames.repos WHERE is_checked = true AND (homepage <> '' OR content <> '')  AND (comment <> '-' OR comment IS NULL) ORDER BY created_at DESC;`
-	var data []models.Repos
-	rows, err := repo.db.Query(context.Background(), sql)
-	if err != nil {
-		log.Error().Msg("[PGXPOOL] GetCheckedRepos select: " + err.Error())
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var g models.Repos
-		err = rows.Scan(&g.Id, &g.KeyWord, &g.RepoName, &g.Homepage, &g.Content, &g.Comment, &g.CreatedAt)
-		if err != nil {
-			log.Error().Msg("[PGXPOOL] GetCheckedRepos rows scan: " + err.Error())
-		}
-		data = append(data, g)
-	}
-
-	return data, err
-}
-
-func (repo *Repo) UpdateCheckedRepo(repos models.Repos) error {
-	_, err := repo.db.Exec(context.Background(), "UPDATE ugames.repos SET content=$1, is_checked = true WHERE id=$2", repos.Content, repos.Id)
-	if err != nil {
-		log.Error().Msg("[PGXPOOL] UpdateCheckedRepo update: " + err.Error())
-		return err
-	}
-	return nil
-}
-
-func (repo *Repo) AddComment(comment models.ReqComment) error {
-	_, err := repo.db.Exec(context.Background(), "UPDATE ugames.repos SET comment=$1 WHERE id=$2", comment.Comment, comment.Id)
-	if err != nil {
-		log.Error().Msg("[PGXPOOL] AddComment update: " + err.Error())
-		return err
-	}
-	return nil
-}
-
-func (repo *Repo) InsertRepo(repoName, homePage, keyWord string) {
-	sqlStatement := `INSERT INTO ugames.repos (repo_name, homePage, key_word) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`
-	_, err := repo.db.Exec(context.Background(), sqlStatement, repoName, homePage, keyWord)
+func (repo *Repo) IncrementGameRang(gameId string) {
+	sqlStatement := `
+		UPDATE casualgames.games 
+		SET game_rang = game_rang + 1
+		WHERE game_id = $1`
+	_, err := repo.db.Exec(
+		context.Background(),
+		sqlStatement,
+		gameId,
+	)
 	if err != nil {
 		log.Error().Msg(err.Error())
 	}

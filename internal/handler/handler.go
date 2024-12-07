@@ -1,19 +1,19 @@
 package handler
 
 import (
-	"encoding/base64"
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"strconv"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog/log"
-	"math"
-	"net/http"
-	"net/url"
-	"strconv"
-	"strings"
-	"ugames/internal/models"
 
-	"ugames/internal/config"
-	"ugames/internal/repo"
+	"casualgames/internal/config"
+	"casualgames/internal/models"
+	"casualgames/internal/repo"
 )
 
 type Handler struct {
@@ -28,240 +28,122 @@ func NewHandler(pool *repo.Repo, cnf *config.Cnf) *Handler {
 	}
 }
 
-func (h *Handler) GetKeyWordsList(c *fiber.Ctx) error {
-	data, err := h.pool.GetKeyWordsList()
-	if err != nil {
-		log.Error().Msg(err.Error())
-	}
-	return c.JSON(data)
-}
-
-func (h *Handler) GetCheckedReposList(c *fiber.Ctx) error {
+func (h *Handler) DeallocateAll(c *fiber.Ctx) error {
 	err := h.pool.DeallocateAll()
 	if err != nil {
 		log.Error().Msg(err.Error())
 	}
-
-	data, err := h.pool.GetCheckedRepos()
-	if err != nil {
-		log.Error().Msg(err.Error())
-	}
-
-	//go h.CheckReposFunc()
-	return c.JSON(data)
+	return c.SendString("Deallocated all prepared statements")
 }
 
-func (h *Handler) CollectGitRepos(c *fiber.Ctx) error {
-	var resp models.Resp
-	var req models.KeyWordReq
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request body",
-		})
-	}
-
-	githubResponse := h.GetGitRepos(req.KeyWord, 1)
-	for _, item := range githubResponse.Items {
-		h.pool.InsertRepo(item.FullName, item.Homepage, req.KeyWord)
-	}
-
-	pages := int(math.Ceil(float64(githubResponse.TotalCount) / 100))
-	if pages > 1 {
-		for i := 2; i <= pages; i++ {
-			githubResponse = h.GetGitRepos(req.KeyWord, i)
-			for _, item := range githubResponse.Items {
-				h.pool.InsertRepo(item.FullName, item.Homepage, req.KeyWord)
-			}
+func (h *Handler) GamesParser(c *fiber.Ctx) error {
+	page := 0
+	for {
+		if page > 50 {
+			break
 		}
+
+		response := getGamesList(page)
+		games := parseGamesFromGd(response)
+		for _, game := range games {
+			h.pool.InsertGame(game)
+		}
+		log.Info().Msg("Page - " + fmt.Sprintf("%d", page))
+		page++
 	}
 
-	resp.Status = "Success"
-	resp.Message = "Напарсено " + strconv.Itoa(githubResponse.TotalCount) + " репозиториев, " + strconv.Itoa(pages) + " страниц API. Запущена проверка."
-	resp.Data = nil
-
-	go h.CheckReposFunc()
-	return c.JSON(resp)
+	return c.JSON("Page - " + fmt.Sprintf("%d", page))
 }
 
-func (h *Handler) CheckRepos(c *fiber.Ctx) error {
-	var resp models.Resp
-	uncheckedList, err := h.pool.GetUncheckedRepos()
+func (h *Handler) GetGames(c *fiber.Ctx) error {
+	page := c.Params("page")
+	pageInt, err := strconv.Atoi(page)
 	if err != nil {
 		log.Error().Msg(err.Error())
-		resp.Status = "Error"
-		resp.Message = err.Error()
-		resp.Data = nil
-		return c.JSON(resp)
-	}
-
-	for _, repo := range uncheckedList {
-		h.CheckGetRepo(repo)
-	}
-
-	resp.Status = "Success"
-	resp.Message = ""
-	resp.Data = uncheckedList
-	return c.JSON(resp)
-}
-
-func (h *Handler) CheckReposFunc() error {
-	uncheckedList, err := h.pool.GetUncheckedRepos()
-	if err != nil {
-		log.Error().Msg(err.Error())
-		return err
-	}
-
-	for _, repo := range uncheckedList {
-		h.CheckGetRepo(repo)
-	}
-
-	return nil
-}
-
-func (h *Handler) GetGitRepos(keyWord string, page int) models.GitReposResp {
-	encodedString := url.QueryEscape(keyWord)
-	pageStr := strconv.Itoa(page)
-
-	url := "https://api.github.com/search/repositories?q=" + encodedString + "&per_page=100&page=" + pageStr
-	log.Printf(url)
-	client := &http.Client{}
-	reqGit, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.Error().Msg(err.Error())
-	}
-
-	reqGit.Header.Set("Authorization", "Bearer "+h.cnf.GithubToken)
-	respGit, err := client.Do(reqGit)
-	if err != nil {
-		log.Error().Msg(err.Error())
-	}
-	defer respGit.Body.Close()
-
-	var githubResponse models.GitReposResp
-	if err := json.NewDecoder(respGit.Body).Decode(&githubResponse); err != nil {
-		log.Error().Msg(err.Error())
-	}
-
-	return githubResponse
-}
-
-func (h *Handler) CheckGetRepo(repo models.Repos) error {
-	var url string
-	if repo.RepoName != nil {
-		url = "https://api.github.com/repos/" + *repo.RepoName + "/contents/README.md"
-	} else {
+		c.JSON("Page is not a number")
 		return nil
 	}
-
-	client := &http.Client{}
-	reqGit, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.Error().Msg(err.Error())
-	}
-
-	reqGit.Header.Set("Authorization", "Bearer "+h.cnf.GithubToken)
-	respGit, err := client.Do(reqGit)
-	if err != nil {
-		log.Error().Msg(err.Error())
-	}
-	defer respGit.Body.Close()
-
-	var gitReposReadme models.GitReposReadme
-	if err := json.NewDecoder(respGit.Body).Decode(&gitReposReadme); err != nil {
-		log.Error().Msg(err.Error())
-	}
-
-	decodedContent, err := base64.StdEncoding.DecodeString(gitReposReadme.Content)
-	if err != nil {
-		log.Error().Msg(err.Error())
-	}
-
-	keywords := []string{
-		"github.io",
-		"itch.io",
-		"youtube.com",
-		"play.unity.com",
-		"play.google.com",
-		"gamejolt.com",
-		"unityroom.com",
-		"maikire.xyz",
-		".gif",
-		".png",
-		".jpg",
-		"simmer.io",
-		"pubnub.com",
-		"kongregate.com",
-		"web.app",
-		"sharemygame.com",
-	}
-
-	// Приводим текст к нижнему регистру для сравнения
-	lowerText := strings.ToLower(string(decodedContent))
-	found := []string{}
-
-	for _, keyword := range keywords {
-		if strings.Contains(lowerText, strings.ToLower(keyword)) {
-			found = append(found, keyword)
-		}
-	}
-
-	var content string
-	if len(found) > 0 {
-		for _, match := range found {
-			content += match + " "
-			//log.Printf(*repo.Content)
-		}
-	} else {
-		log.Printf("Слова не найдены.")
-	}
-
-	repo.Content = &content
-
-	err = h.pool.UpdateCheckedRepo(repo)
-	if err != nil {
-		log.Error().Msg(err.Error())
-	}
-
+	games := h.pool.GetGames(pageInt)
+	c.JSON(games)
 	return nil
 }
 
-func (h *Handler) AddComment(c *fiber.Ctx) error {
-	var resp models.Resp
-	var req models.ReqComment
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request body",
-		})
-	}
-
-	err := h.pool.AddComment(req)
-	if err != nil {
-		log.Error().Msg(err.Error())
-		resp.Status = "Error"
-		resp.Message = "Ошибка при добавлении комментария!"
-		return c.JSON(resp)
-	}
-
-	//go h.pool.DeallocateAll()
-
-	resp.Status = "Success"
-	resp.Message = "Комментарий добавлен успешно!"
-	return c.JSON(resp)
+func (h *Handler) IncrementGameRang(c *fiber.Ctx) error {
+	gameId := c.Params("gameId")
+	h.pool.IncrementGameRang(gameId)
+	return nil
 }
 
-func (h *Handler) FixDb(c *fiber.Ctx) error {
-	err := h.pool.DeallocateAll()
+func getGamesList(page int) models.ResponseGd {
+	url := "https://gd-website-api.gamedistribution.com/graphql"
+	method := "POST"
+
+	//convert to string page
+	pageStr := fmt.Sprintf("%d", page)
+
+	payload := `{"query":"fragment CoreGame on SearchHit {\n  objectID\n  title\n  company\n  visible\n  exclusiveGame\n  slugs {\n    name\n    __typename\n  }\n  assets {\n    name\n    __typename\n  }\n  __typename\n}\n\nquery GetGamesSearched($id: String! = \"\", $perPage: Int! = 0, $page: Int! = 0, $search: String! = \"\", $UIfilter: UIFilterInput! = {}, $filters: GameSearchFiltersFlat! = {}, $sortBy: KnownOrder, $sortByGeneric: [String!], $sortByCountryPerf: SortByCountryPerf! = {}, $sortByGenericWithDirection: [SortByGenericWithDirection!]) {\n  gamesSearched(\n    input: {collectionObjectId: $id, hitsPerPage: $perPage, page: $page, search: $search, UIfilter: $UIfilter, filters: $filters, sortBy: $sortBy, sortByCountryPerf: $sortByCountryPerf, sortByGeneric: $sortByGeneric, sortByGenericWithDirection: $sortByGenericWithDirection}\n  ) {\n    hitsPerPage\n    nbHits\n    nbPages\n    page\n    hits {\n      ...CoreGame\n      __typename\n    }\n    filters {\n      title\n      key\n      type\n      values\n      __typename\n    }\n    __typename\n  }\n}","variables":{"id":"","perPage":100,"page":` + pageStr + `,"search":"","UIfilter":{},"filters":{}}}`
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, bytes.NewBuffer([]byte(payload)))
+	if err != nil {
+
+	}
+
+	// Headers
+	req.Header.Add("accept", "*/*")
+	req.Header.Add("accept-language", "ru,en-US;q=0.9,en;q=0.8,ru-RU;q=0.7")
+	req.Header.Add("apollographql-client-name", "GDWebSite")
+	req.Header.Add("apollographql-client-version", "1.0")
+	req.Header.Add("content-type", "application/json")
+	req.Header.Add("dnt", "1")
+	req.Header.Add("origin", "https://gamedistribution.com")
+	req.Header.Add("priority", "u=1, i")
+	req.Header.Add("referer", "https://gamedistribution.com/")
+	req.Header.Add("sec-ch-ua", `"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"`)
+	req.Header.Add("sec-ch-ua-mobile", "?0")
+	req.Header.Add("sec-ch-ua-platform", `"macOS"`)
+	req.Header.Add("sec-fetch-dest", "empty")
+	req.Header.Add("sec-fetch-mode", "cors")
+	req.Header.Add("sec-fetch-site", "same-site")
+	req.Header.Add("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+
+	// Execute the request
+	res, err := client.Do(req)
+	if err != nil {
+		log.Error().Msg(err.Error())
+	}
+	defer res.Body.Close()
+
+	// Read the response
+	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Error().Msg(err.Error())
 	}
 
-	var resp models.Resp
-	resp.Status = "Success"
-	resp.Message = "Выполнена волшебная SQL команда!"
-	return c.JSON(resp)
+	var response models.ResponseGd
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		log.Error().Msg(err.Error())
+	}
+
+	return response
 }
 
-//https://supabase.com/dashboard/project/omdkwxnqhidnjisdfboh/settings/database
-//https://docs.github.com/ru/rest/search/search?apiVersion=2022-11-28
-//https://api.github.com/search/repositories?q=unity+game&per_page=100&page=2
-//https://api.github.com/repos/connorwright1122/piratesoftware-jam-2024/contents/README.md
+func parseGamesFromGd(response models.ResponseGd) []models.InsertIntoDbGame {
+	var games []models.InsertIntoDbGame
+	for _, hit := range response.Data.GamesSearched.Hits {
+		var link string
+		if len(hit.SlugsGd) > 0 {
+			link = hit.SlugsGd[0].Name
+		}
+
+		game := models.InsertIntoDbGame{
+			GameId:        hit.ObjectID,
+			GameNameEn:    hit.Title,
+			GameDeveloper: hit.Company,
+			GameUrlName:   link,
+		}
+		games = append(games, game)
+	}
+	return games
+}
